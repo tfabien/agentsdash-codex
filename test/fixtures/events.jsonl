@@ -1,0 +1,10 @@
+{"v":2,"session":"019a","project":"codex-demo","cwd":"C:/work/codex-demo","agent":"lead","role":"lead","evt":"SessionStart","state":"your_turn","cmd":"Session started","detail":"","model":"gpt-5-codex"}
+{"v":2,"session":"019a","project":"codex-demo","cwd":"C:/work/codex-demo","agent":"lead","role":"lead","evt":"UserPromptSubmit","state":"working","cmd":"Prompt: Add a retry to the uploader","detail":"","model":"gpt-5-codex"}
+{"v":2,"session":"019a","project":"codex-demo","cwd":"C:/work/codex-demo","agent":"lead","role":"lead","evt":"PreToolUse","state":"working","cmd":"Bash npm test","detail":"npm test","model":"gpt-5-codex"}
+{"v":2,"session":"019a","project":"codex-demo","cwd":"C:/work/codex-demo","agent":"lead","role":"lead","evt":"PreToolUse","state":"working","cmd":"apply_patch","detail":"","model":"gpt-5-codex"}
+{"v":2,"session":"019a","project":"codex-demo","cwd":"C:/work/codex-demo","agent":"019a","role":"explorer","evt":"SubagentStart","state":"working","cmd":"Started","detail":"","model":"gpt-5-codex"}
+{"v":2,"session":"019a","project":"codex-demo","cwd":"C:/work/codex-demo","agent":"019a","role":"explorer","evt":"PreToolUse","state":"working","cmd":"Bash rg uploader","detail":"rg uploader","model":"gpt-5-codex"}
+{"v":2,"session":"019a","project":"codex-demo","cwd":"C:/work/codex-demo","agent":"019a","role":"explorer","evt":"PermissionRequest","state":"needs_you","cmd":"Approve? Bash rm -rf build","detail":"rm -rf build","model":"gpt-5-codex"}
+{"v":2,"session":"019a","project":"codex-demo","cwd":"C:/work/codex-demo","agent":"019a","role":"explorer","evt":"SubagentStop","state":"done","cmd":"Found 3 call sites.","detail":"","model":"gpt-5-codex"}
+{"v":2,"session":"019a","project":"codex-demo","cwd":"C:/work/codex-demo","agent":"lead","role":"lead","evt":"Stop","state":"your_turn","cmd":"Done, waiting for you","detail":"","reply_first":"Retry added, tests pass.","reply_last":"Next: review the diff.","model":"gpt-5-codex"}
+{"v":2,"session":"019a","project":"codex-demo","cwd":"C:/work/codex-demo","agent":"lead","role":"lead","evt":"SessionEnd","state":"done","cmd":"Session ended","detail":"","model":"gpt-5-codex"}

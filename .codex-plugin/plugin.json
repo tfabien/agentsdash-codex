@@ -1,0 +1,6 @@
+{
+  "name": "agentsdash-codex",
+  "version": "0.1.0",
+  "description": "Codex adapter for agentsdash: sends session, tool and sub-agent activity to the local agent dashboard.",
+  "hooks": "./hooks/hooks.json"
+}
