@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { findCore, maybeStartInstaller, postToHub, PROTOCOL, MIN_CORE } from '../scripts/hub_client.mjs';
+import { findCore, maybeStartInstaller, maybeStartUpdate, postToHub, PROTOCOL, MIN_CORE } from '../scripts/hub_client.mjs';
 import { compareVersions } from '../scripts/common.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'hubclient-'));
@@ -57,6 +57,22 @@ test('installer_start_is_throttled', () => {
   assert.equal(maybeStartInstaller({ dir, now: Date.now() / 1000 + 1, spawnFn }), false, 'stamp just written');
   assert.equal(maybeStartInstaller({ dir, now: Date.now() / 1000 + 601, spawnFn }), true);
   assert.equal(maybeStartInstaller({ dir: path.join(dir, 'core_install.stamp', 'x'), now: Date.now() / 1000 + 2000, spawnFn }), false, 'an unwritable folder is not an error');
+});
+
+test('update_check_runs_once_a_day_and_only_for_an_installed_core', () => {
+  const home = tmp();
+  const env = { AGENTSDASH_USER_HOME: home, AGENTSDASH_STATE_DIR: path.join(home, 'state') };
+  const started = [];
+  const spawnFn = (...args) => { started.push(args); return { on() {}, unref() {} }; };
+  const opts = { env, siblingScript: null, spawnFn };
+  assert.equal(maybeStartUpdate(opts), false, 'no core installed: the first-install path handles it');
+  install(home, MIN_CORE);
+  const now = Date.now() / 1000;
+  assert.equal(maybeStartUpdate({ ...opts, now }), true);
+  assert.equal(started.length, 1);
+  assert.equal(maybeStartUpdate({ ...opts, now: now + 3600 }), false, 'checked an hour ago');
+  assert.equal(maybeStartUpdate({ ...opts, now: now + 86400 + 5 }), true, 'a day later');
+  assert.equal(maybeStartUpdate({ env: { ...env, AGENTSDASH_CORE_DIR: path.join(home, 'checkout') }, siblingScript: null, spawnFn, now: now + 3 * 86400 }), false, 'a core the user names is never updated');
 });
 
 const freePort = () => new Promise((resolve) => {
