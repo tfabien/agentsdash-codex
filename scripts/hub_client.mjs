@@ -12,6 +12,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_HUB_SCRIPT = path.resolve(HERE, '..', 'hub', 'hub.mjs');         // the hub folder next to the scripts: only in the checkout
 const INSTALLER = path.join(HERE, 'core_install.mjs');
 const INSTALL_EVERY_S = 600;
+const UPDATE_EVERY_S = 86400;                                            // an installed core is looked up against the latest release once a day
 const SPAWN_WAIT_MS = 400;
 
 const isLoopback = (host) => /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(host);
@@ -87,17 +88,32 @@ export function findCore({ env = process.env, hubScript, siblingScript = DEFAULT
   return null;
 }
 
-/** Starts core_install.mjs detached, at most once every 10 minutes (stamp file in `dir`). Never throws, never waits. @returns {boolean} true when it started one. */
-export function maybeStartInstaller({ dir, now, spawnFn = spawn, script = INSTALLER, env = process.env }) {
+/** Starts core_install.mjs detached, at most once per `everyS` seconds (stamp file `stampName` in `dir`). Never throws, never waits. @returns {boolean} true when it started one. */
+export function maybeStartInstaller({ dir, now, spawnFn = spawn, script = INSTALLER, env = process.env, everyS = INSTALL_EVERY_S, stampName = 'core_install.stamp' }) {
   try {
-    const stamp = path.join(dir, 'core_install.stamp');
-    try { if (now - fs.statSync(stamp).mtimeMs / 1000 < INSTALL_EVERY_S) return false; } catch { /* no stamp yet */ }
+    const stamp = path.join(dir, stampName);
+    try { if (now - fs.statSync(stamp).mtimeMs / 1000 < everyS) return false; } catch { /* no stamp yet */ }
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(stamp, String(now));
     const child = spawnFn(process.execPath, [script], { detached: true, stdio: 'ignore', windowsHide: true, env });
     child.on?.('error', () => {});
     child.unref?.();
     return true;
+  } catch { return false; }
+}
+
+/**
+ * Once a day, when an installed core runs (not a checkout or a core the user names), starts core_install.mjs to fetch a newer release for PROTOCOL.
+ * It lands in its own ~/.agentsdash/core/<version>/ folder; the running hub is left alone and the next hub start runs the highest folder (findCore).
+ * The stamp is checked first, so most events cost one stat. Never throws, never waits. @returns {boolean} true when it started an install.
+ */
+export function maybeStartUpdate({ env = process.env, hubScript, siblingScript, spawnFn, now = Date.now() / 1000 } = {}) {
+  try {
+    const dir = stateDir(env);
+    try { if (now - fs.statSync(path.join(dir, 'core_update.stamp')).mtimeMs / 1000 < UPDATE_EVERY_S) return false; } catch { /* no stamp yet */ }
+    const core = findCore({ env, hubScript, ...(siblingScript === undefined ? {} : { siblingScript }) });
+    if (core?.mode !== 'installed') return false;
+    return maybeStartInstaller({ dir, now, env, everyS: UPDATE_EVERY_S, stampName: 'core_update.stamp', ...(spawnFn ? { spawnFn } : {}) });
   } catch { return false; }
 }
 
@@ -152,6 +168,7 @@ export async function postToHub(route, body, { host, timeoutMs = 1500, spawnHub:
         if (await waitForHealth(host, Math.min(deadline, Date.now() + SPAWN_WAIT_MS))) r = await tryPost(host, route, data, deadline);
       } else maybeStartInstaller({ dir: stateDir(env), now: Date.now() / 1000, env, ...(spawnFn ? { spawnFn } : {}) });   // no core yet: download one, this event is dropped
     }
+    if (r.ok && allowSpawn && isLoopback(host)) maybeStartUpdate({ env, hubScript, siblingScript, spawnFn });
     return r.ok;
   } catch {
     return false;
