@@ -19,6 +19,7 @@ node scripts/install_codex_hooks.mjs --write    # merges it into ~/.codex/hooks.
 Then run `/hooks` in Codex once and trust the new hooks (Codex skips hooks it has not reviewed), and open a new session. The page is <http://127.0.0.1:8765/>.
 The first hook downloads the hub from the releases of [tfabien/agentsdash](https://github.com/tfabien/agentsdash) into `~/.agentsdash/core/<version>/`
 (sha256 checked); the first event is dropped, the next one finds it. Install help: [INSTALL.md](INSTALL.md).
+Behind a proxy, set `HTTPS_PROXY` (or `HTTP_PROXY`, with `NO_PROXY` for exceptions): the download goes through a CONNECT tunnel. A proxy that inspects TLS needs `NODE_EXTRA_CA_CERTS`.
 
 The repository also holds `hooks/hooks.json` and `.codex-plugin/plugin.json`, the plugin form (hooks bundled with `${PLUGIN_ROOT}`), not tried yet.
 
