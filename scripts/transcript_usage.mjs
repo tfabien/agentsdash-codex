@@ -1,38 +1,36 @@
 /*
- * Token and context counts read from Claude Code transcripts (JSONL), incrementally.
+ * Token and context counts read from Codex rollout files (JSONL), incrementally.
  *
- * A transcript can reach several MB, so each scan starts at the byte offset where the previous one stopped and
- * only reads whole lines (a line Claude is still writing waits for the next scan). One assistant message is
- * written on several lines that repeat the same message.id and usage: each id is counted once.
+ * A rollout can reach several MB, so each scan starts at the byte offset where the previous one stopped and
+ * only reads whole lines (a line Codex is still writing waits for the next scan).
+ * Codex writes `{"type":"event_msg","payload":{"type":"token_count","info":{...}}}` after each model call; `info`
+ * is null on lines that only carry rate limits.
  *
- * tokens   = input + cache creation + output, summed (cache reads are left out: they repeat the context every turn)
- * last_ctx = input + cache creation + cache read of the last assistant message (the size of the context)
- * title    = last "custom-title" (desktop app) or "ai-title" (terminal) line of the file
+ * tokens   = total_token_usage.input_tokens - cached_input_tokens + output_tokens (a running total in the file, so
+ *            the last one wins; cached input is left out: it repeats the context every turn)
+ * last_ctx = last_token_usage.input_tokens of the last call (the size of the context; input includes the cached part)
+ * window   = model_context_window of that line (0 when unknown)
+ * title    = thread name of the session in ~/.codex/session_index.jsonl (see threadTitle), not in the rollout
  * Entry keys stay snake_case: the cache files are the ones the Python version wrote. Nothing here throws.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 
 const MAX_READ = 4 * 1024 * 1024;
-const SEEN_KEEP = 50;
 
-export const emptyEntry = () => ({ offset: 0, size: 0, tokens: 0, last_ctx: 0, model: '', title: '', seen: [], partial: false });
+export const emptyEntry = () => ({ offset: 0, size: 0, tokens: 0, last_ctx: 0, window: 0, model: '', title: '', partial: false });
 
 function apply(entry, record) {
-  const kind = record.type;
-  if (kind === 'custom-title' && record.customTitle) entry.title = String(record.customTitle);
-  else if (kind === 'ai-title' && record.aiTitle) entry.title = String(record.aiTitle);
-  else if (kind === 'assistant') {
-    const msg = record.message;
-    if (!msg || typeof msg !== 'object' || !msg.usage || typeof msg.usage !== 'object') return;
-    const n = (key) => (Number.isInteger(msg.usage[key]) ? msg.usage[key] : 0);
-    if (msg.model) entry.model = String(msg.model);
-    entry.last_ctx = n('input_tokens') + n('cache_creation_input_tokens') + n('cache_read_input_tokens');
-    const mid = msg.id;
-    if (mid && entry.seen.includes(mid)) return;
-    if (mid) entry.seen = [...entry.seen, mid].slice(-SEEN_KEEP);
-    entry.tokens += n('input_tokens') + n('cache_creation_input_tokens') + n('output_tokens');
-  }
+  if (record.type === 'turn_context' && record.payload && record.payload.model) entry.model = String(record.payload.model);
+  if (record.type !== 'event_msg') return;
+  const payload = record.payload;
+  if (!payload || payload.type !== 'token_count' || !payload.info || typeof payload.info !== 'object') return;
+  const n = (obj, key) => (obj && Number.isInteger(obj[key]) && obj[key] >= 0 ? obj[key] : 0);
+  const total = payload.info.total_token_usage;
+  const last = payload.info.last_token_usage;
+  if (total) entry.tokens = Math.max(0, n(total, 'input_tokens') - n(total, 'cached_input_tokens')) + n(total, 'output_tokens');
+  if (last) entry.last_ctx = n(last, 'input_tokens');
+  entry.window = n(payload.info, 'model_context_window');
 }
 
 /** Read the new whole lines of `file` and return the updated entry (see emptyEntry for its fields). */
@@ -74,10 +72,25 @@ export function scan(file, previous, maxRead = MAX_READ) {
   return entry;
 }
 
-/** Context window guess (transcripts do not record it): 1M when the context is past 200k or the model id says
- * [1m], else `dflt` (1M: desktop sessions run with a 1M window; set "context_window" in the config file). */
-export function contextWindow(lastCtx, model, dflt = 1000000) {
-  return lastCtx > 200000 || String(model).includes('[1m]') ? 1000000 : dflt;
+/** Context window: the size Codex records on the token_count line, else `dflt` (Codex models: about 258k). */
+export function contextWindow(recorded, dflt = 258400) {
+  return Number.isInteger(recorded) && recorded > 0 ? recorded : dflt;
+}
+
+/** Name Codex gave the thread (last matching line of session_index.jsonl in CODEX_HOME or ~/.codex); '' when none. */
+export function threadTitle(sessionId, home) {
+  try {
+    const raw = fs.readFileSync(path.join(home, 'session_index.jsonl'), 'utf8');
+    let title = '';
+    for (const line of raw.split('\n')) {
+      if (!line.includes(sessionId)) continue;
+      try {
+        const rec = JSON.parse(line);
+        if (rec && rec.id === sessionId && typeof rec.thread_name === 'string' && rec.thread_name) title = rec.thread_name;
+      } catch { /* a line being written */ }
+    }
+    return title;
+  } catch { return ''; }
 }
 
 const cachePath = (dir, session4) => path.join(dir, `${session4 || 'session'}.tok.json`);

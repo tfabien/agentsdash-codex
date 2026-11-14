@@ -4,8 +4,8 @@ The Codex adapter of [agentsdash](https://github.com/tfabien/agentsdash), an age
 Codex hooks send what each session and sub-agent is doing (state, tools, questions, plan) to a local hub that draws one page
 with a tile per session. The hub (the core) is a separate repository; the hook downloads it on first use.
 
-Status: first version, written against the Codex hooks documentation (events, payload fields). Tokens, context fill and the session title
-need the Codex transcript format and are not sent yet; the plan comes from the `update_plan` tool.
+Status: first version, written against the Codex hooks documentation (events, payload fields). Tokens and context fill come from the
+`token_count` lines of the Codex rollout file, the session title from `~/.codex/session_index.jsonl`; the plan comes from the `update_plan` tool.
 
 ## Install
 

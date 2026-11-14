@@ -26,7 +26,7 @@ import { pathToFileURL } from 'node:url';
 import { tidy, configWindow, envVar, hubHost, pluginConfig, stateDir } from './common.mjs';
 import { postEvent, restartStaleHub } from './hub_client.mjs';
 import { update as updatePlan } from './plan_tracker.mjs';
-import { contextWindow, loadCache, saveCache, scan } from './transcript_usage.mjs';
+import { contextWindow, loadCache, saveCache, scan, threadTitle } from './transcript_usage.mjs';
 
 const NEEDS_YOU_TYPES = new Set(['permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog', 'agent_needs_input']);
 const CLEARING_EVENTS = new Set(['PostToolUse', 'PostToolUseFailure', 'PermissionDenied']);
@@ -206,6 +206,11 @@ export function buildEvent(p, env = process.env, dir = stateDir(env)) {
   return null;
 }
 
+/** Codex home folder: CODEX_HOME, else ~/.codex. */
+function codexHome(env) {
+  return env.CODEX_HOME || path.join(env.USERPROFILE || env.HOME || '', '.codex');
+}
+
 /** Path of a sub-agent's own transcript: agent_transcript_path (SubagentStop) or derived from the lead's path. */
 function subagentTranscript(p) {
   if (p.agent_transcript_path) return String(p.agent_transcript_path);
@@ -217,7 +222,7 @@ function subagentTranscript(p) {
 
 /** Add token counts (and, for the lead, session total, context and title) read from the transcripts.
  * Never throws: on any problem the event goes out unchanged. */
-export function addUsage(ev, p, dir, mask = false, windowDefault = 1000000) {
+export function addUsage(ev, p, dir, mask = false, windowDefault = 258400, env = process.env) {
   try {
     const session4 = alnum(p.session_id).slice(0, 4);
     const isSub = Boolean(p.agent_id);
@@ -233,10 +238,10 @@ export function addUsage(ev, p, dir, mask = false, windowDefault = 1000000) {
       out.stok = Object.values(cache).reduce((sum, e) => sum + (e && typeof e === 'object' ? e.tokens || 0 : 0), 0);
       if (entry.last_ctx > 0) {
         out.ctx_k = Math.round(entry.last_ctx / 1000);
-        out.ctx_pct = Math.round((100 * entry.last_ctx) / contextWindow(entry.last_ctx, entry.model, windowDefault));
+        out.ctx_pct = Math.min(100, Math.round((100 * entry.last_ctx) / contextWindow(entry.window, windowDefault)));
       }
-      if (entry.title && !mask) {
-        const title = tidy(entry.title);
+      if (!mask) {
+        const title = tidy(threadTitle(String(p.session_id || ''), codexHome(env)));
         if (title) out.title = title;
       }
     }
@@ -269,7 +274,7 @@ async function main() {
   const plan = trackPlan(p, dir);                          // every payload, even without an event
   let ev = buildEvent(p, env, dir);
   if (!ev) return;
-  ev = addPlan(addUsage(ev, p, dir, Boolean(envVar('MASK', env)), configWindow(pluginConfig(env))), plan);
+  ev = addPlan(addUsage(ev, p, dir, Boolean(envVar('MASK', env)), configWindow(pluginConfig(env)), env), plan);
   if (!ev.model && typeof p.model === 'string' && p.model) ev.model = tidy(p.model);        // Codex sends the model in every payload
   if (envVar('DRY_RUN', env)) { process.stderr.write(`${JSON.stringify(ev)}\n`); return; }
   if (ev.evt === 'SessionStart') await restartStaleHub({ host: hubHost(env) });       // a plugin update leaves an old hub running
