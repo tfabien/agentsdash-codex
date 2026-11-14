@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /*
  * Downloads a core release (the hub) from GitHub into ~/.agentsdash/core/<version>/. Standard library only.
+ * Behind a proxy (HTTPS_PROXY / HTTP_PROXY, NO_PROXY) the download goes through a CONNECT tunnel: see `proxyFetch`.
  *
  * A release holds `agentsdash-core-<version>-p<protocol>.tar.gz` and the same name plus `.sha256`. The newest release for the protocol
  * this plugin speaks is downloaded, its sha256 checked, unpacked into a temporary folder and renamed to <version> in one step, so a
@@ -8,7 +9,10 @@
  */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import http from 'node:http';
+import https from 'node:https';
 import path from 'node:path';
+import tls from 'node:tls';
 import zlib from 'node:zlib';
 import { pathToFileURL } from 'node:url';
 import { PROTOCOL, coresDir, envVar, pluginConfig } from './common.mjs';
@@ -101,13 +105,92 @@ export function pickAsset(releases, protocol) {
   return null;
 }
 
+/** The proxy URL for `url` (HTTPS_PROXY, https_proxy, HTTP_PROXY, http_proxy; NO_PROXY exempts hosts), or null for a direct connection. */
+export function proxyFor(url, env = process.env) {
+  const raw = env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy;
+  if (!raw) return null;
+  let target, proxy;
+  try {
+    target = new URL(url);
+    proxy = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`);
+  } catch { return null; }
+  if (proxy.protocol !== 'http:') return null;                           // only a plain-HTTP proxy is spoken to (CONNECT)
+  const host = target.hostname.toLowerCase();
+  for (const item of String(env.NO_PROXY || env.no_proxy || '').split(',')) {
+    const rule = item.trim().toLowerCase().replace(/:\d+$/, '');
+    if (!rule) continue;
+    if (rule === '*') return null;
+    const bare = rule.replace(/^\*?\./, '');
+    if (host === bare || host.endsWith(`.${bare}`)) return null;
+  }
+  return proxy;
+}
+
+/** An https agent that reaches the server through an HTTP proxy: CONNECT <host>:<port>, then TLS over the tunnel. */
+class ProxyAgent extends https.Agent {
+  constructor(proxy, ca) {
+    super({ keepAlive: false });
+    this.proxy = proxy;
+    this.ca = ca;
+  }
+  createConnection(options, cb) {
+    const host = options.host || options.hostname;
+    const port = options.port || 443;
+    const headers = { Host: `${host}:${port}` };
+    if (this.proxy.username) {
+      const login = `${decodeURIComponent(this.proxy.username)}:${decodeURIComponent(this.proxy.password)}`;
+      headers['Proxy-Authorization'] = `Basic ${Buffer.from(login).toString('base64')}`;
+    }
+    const req = http.request({ host: this.proxy.hostname.replace(/^\[|\]$/g, ''), port: this.proxy.port || 80, method: 'CONNECT', path: `${host}:${port}`, headers });
+    req.once('connect', (res, socket) => {
+      if (res.statusCode !== 200) { socket.destroy(); cb(new Error(`proxy answered ${res.statusCode}`)); return; }
+      cb(null, tls.connect({ socket, servername: options.servername || host, ca: this.ca }));
+    });
+    req.once('error', cb);
+    req.end();
+  }
+}
+
+function getViaProxy(url, init, proxy, ca, hops) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, { headers: init.headers, signal: init.signal, agent: new ProxyAgent(proxy, ca) }, (res) => {
+      const location = res.headers.location;
+      if (res.statusCode >= 300 && res.statusCode < 400 && location) {   // GitHub redirects release downloads to another host
+        res.resume();
+        if (hops >= 5) { reject(new Error('too many redirects')); return; }
+        getViaProxy(new URL(location, url).href, init, proxy, ca, hops + 1).then(resolve, reject);
+        return;
+      }
+      const chunks = [];
+      let size = 0;
+      res.on('data', (chunk) => {
+        size += chunk.length;
+        if (size > MAX_BYTES + 1024) { req.destroy(new Error('response too large')); return; }
+        chunks.push(chunk);
+      });
+      res.on('end', () => resolve(new Response(res.statusCode === 204 ? null : Buffer.concat(chunks), { status: res.statusCode })));
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+  });
+}
+
+/**
+ * `fetch` for https URLs that honours HTTPS_PROXY / HTTP_PROXY / NO_PROXY (Node's `fetch` ignores them): through a CONNECT tunnel when a
+ * proxy applies, plain `fetch` otherwise. Redirects are followed (up to 5). `ca` replaces the trusted certificate authorities (tests).
+ */
+export function proxyFetch(url, init = {}, { env = process.env, ca } = {}) {
+  const proxy = proxyFor(url, env);
+  return proxy ? getViaProxy(url, init, proxy, ca, 0) : globalThis.fetch(url, init);
+}
+
 const rm = (dir) => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } };
 
 /**
  * Installs the newest core of `repo` that speaks `protocol` into `<coresDir>/<version>`.
  * @returns {Promise<{version: string} | null>} null when anything fails (offline, bad hash, wrong content); nothing is left behind.
  */
-export async function installCore({ repo, protocol, coresDir: base, fetchImpl = globalThis.fetch }) {
+export async function installCore({ repo, protocol, coresDir: base, fetchImpl = proxyFetch }) {
   let partial = null;
   try {
     const get = (url) => fetchImpl(url, { headers: { 'User-Agent': 'agentsdash', Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(TIMEOUT_MS) });
